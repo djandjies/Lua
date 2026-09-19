@@ -1,0 +1,462 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+-- State & Settings
+local MIN_SPEED = 10
+local MAX_SPEED = 600
+local FLY_SPEED = 50
+local CARRY_RANGE = 20
+
+local isFlying = false
+local isESPEnabled = false
+local isCarrying = false
+local moveUpMobile = false
+local moveDownMobile = false
+
+local carriedPlayer = nil
+local carryWeld = nil
+local linearVelocity, alignOrientation, attachment
+
+-- ==========================================
+-- 1. UI GENERATION (MOBILE FRIENDLY)
+-- ==========================================
+local playerGui = player:WaitForChild("PlayerGui")
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "MobileUtilityGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Minimize / Toggle Button
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "ToggleMenuBtn"
+toggleBtn.Size = UDim2.new(0, 70, 0, 35)
+toggleBtn.Position = UDim2.new(0, 10, 0, 10)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 12
+toggleBtn.Text = "MENU"
+toggleBtn.Parent = screenGui
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 8)
+toggleCorner.Parent = toggleBtn
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(100, 100, 100)
+toggleStroke.Thickness = 1.5
+toggleStroke.Parent = toggleBtn
+
+-- Main Container
+local container = Instance.new("Frame")
+container.Size = UDim2.new(0, 130, 0, 330) 
+container.Position = UDim2.new(0, 10, 0.5, 0)
+container.AnchorPoint = Vector2.new(0, 0.5)
+container.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+container.BackgroundTransparency = 0.2
+container.Parent = screenGui
+
+local containerCorner = Instance.new("UICorner")
+containerCorner.CornerRadius = UDim.new(0, 10)
+containerCorner.Parent = container
+
+local containerPadding = Instance.new("UIPadding")
+containerPadding.PaddingTop = UDim.new(0, 8)
+containerPadding.PaddingBottom = UDim.new(0, 8)
+containerPadding.PaddingLeft = UDim.new(0, 8)
+containerPadding.PaddingRight = UDim.new(0, 8)
+containerPadding.Parent = container
+
+local uiLayout = Instance.new("UIListLayout")
+uiLayout.Padding = UDim.new(0, 6)
+uiLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+uiLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+uiLayout.Parent = container
+
+toggleBtn.Activated:Connect(function()
+	container.Visible = not container.Visible
+end)
+
+local function createButton(name, text, height)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.new(1, 0, 0, height or 40)
+	btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.Text = text
+	btn.AutoButtonColor = true
+	
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = btn
+	
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(80, 80, 80)
+	stroke.Thickness = 1
+	stroke.Parent = btn
+	
+	btn.Parent = container
+	return btn
+end
+
+local flyBtn = createButton("FlyBtn", "FLY: OFF")
+local espBtn = createButton("ESPBtn", "ESP: OFF")
+local carryBtn = createButton("CarryBtn", "CARRY: OFF")
+
+-- Height Control Container
+local heightFrame = Instance.new("Frame")
+heightFrame.Size = UDim2.new(1, 0, 0, 35)
+heightFrame.BackgroundTransparency = 1
+heightFrame.Parent = container
+
+local heightLayout = Instance.new("UIListLayout")
+heightLayout.FillDirection = Enum.FillDirection.Horizontal
+heightLayout.Padding = UDim.new(0, 4)
+heightLayout.Parent = heightFrame
+
+local upBtn = Instance.new("TextButton")
+upBtn.Size = UDim2.new(0.5, -2, 1, 0)
+upBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+upBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+upBtn.Font = Enum.Font.GothamBold
+upBtn.Text = "UP ▲"
+upBtn.TextSize = 11
+upBtn.Parent = heightFrame
+Instance.new("UICorner", upBtn).CornerRadius = UDim.new(0, 6)
+
+local downBtn = Instance.new("TextButton")
+downBtn.Size = UDim2.new(0.5, -2, 1, 0)
+downBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+downBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+downBtn.Font = Enum.Font.GothamBold
+downBtn.Text = "DOWN ▼"
+downBtn.TextSize = 11
+downBtn.Parent = heightFrame
+Instance.new("UICorner", downBtn).CornerRadius = UDim.new(0, 6)
+
+-- Speed Label
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, 0, 0, 16)
+speedLabel.BackgroundTransparency = 1
+speedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.TextSize = 11
+speedLabel.Text = "SPEED: " .. FLY_SPEED
+speedLabel.Parent = container
+
+-- Slider Track
+local sliderTrack = Instance.new("TextButton")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Size = UDim2.new(1, 0, 0, 22)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+sliderTrack.Text = ""
+sliderTrack.Parent = container
+
+local trackCorner = Instance.new("UICorner")
+trackCorner.CornerRadius = UDim.new(1, 0)
+trackCorner.Parent = sliderTrack
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new((FLY_SPEED - MIN_SPEED) / (MAX_SPEED - MIN_SPEED), 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+sliderFill.Parent = sliderTrack
+Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1, 0)
+
+-- ==========================================
+-- 2. TOUCH & SLIDER LOGIC
+-- ==========================================
+local isDraggingSlider = false
+
+local function updateSlider(input)
+	local trackSize = sliderTrack.AbsoluteSize.X
+	local trackPos = sliderTrack.AbsolutePosition.X
+	if trackSize <= 0 then return end
+	
+	local relativePos = math.clamp(input.Position.X - trackPos, 0, trackSize)
+	local percentage = relativePos / trackSize
+	
+	sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+	FLY_SPEED = math.floor(MIN_SPEED + ((MAX_SPEED - MIN_SPEED) * percentage))
+	speedLabel.Text = "SPEED: " .. FLY_SPEED
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isDraggingSlider = true
+		updateSlider(input)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if isDraggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		updateSlider(input)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isDraggingSlider = false
+	end
+end)
+
+upBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		moveUpMobile = true
+	end
+end)
+upBtn.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		moveUpMobile = false
+	end
+end)
+
+downBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		moveDownMobile = true
+	end
+end)
+downBtn.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		moveDownMobile = false
+	end
+end)
+
+-- ==========================================
+-- 3. ESP LOGIC
+-- ==========================================
+local function applyESP(targetChar)
+	if not targetChar or targetChar == character then return end
+	if not targetChar:FindFirstChild("ESPHighlight") then
+		local highlight = Instance.new("Highlight")
+		highlight.Name = "ESPHighlight"
+		highlight.FillColor = Color3.fromRGB(255, 0, 50)
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+		highlight.FillTransparency = 0.5
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		highlight.Parent = targetChar
+	end
+end
+
+local function removeESP(targetChar)
+	if not targetChar then return end
+	local highlight = targetChar:FindFirstChild("ESPHighlight")
+	if highlight then highlight:Destroy() end
+end
+
+local function updateAllESP()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character then
+			if isESPEnabled then applyESP(p.Character) else removeESP(p.Character) end
+		end
+	end
+end
+
+espBtn.Activated:Connect(function()
+	isESPEnabled = not isESPEnabled
+	espBtn.Text = isESPEnabled and "ESP: ON" or "ESP: OFF"
+	espBtn.BackgroundColor3 = isESPEnabled and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(35, 35, 35)
+	updateAllESP()
+end)
+
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function(c) if isESPEnabled then applyESP(c) end end)
+end)
+
+-- ==========================================
+-- 4. PHYSICAL WELD SEAT CARRY LOGIC
+-- ==========================================
+local function getClosestPlayer()
+	local closestPlayer = nil
+	local shortestDistance = CARRY_RANGE
+
+	if not rootPart then return nil end
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local targetRoot = p.Character.HumanoidRootPart
+			local dist = (targetRoot.Position - rootPart.Position).Magnitude
+			if dist < shortestDistance then
+				shortestDistance = dist
+				closestPlayer = p
+			end
+		end
+	end
+	return closestPlayer
+end
+
+local function dropPlayer()
+	isCarrying = false
+	if carryWeld then
+		carryWeld:Destroy()
+		carryWeld = nil
+	end
+	carriedPlayer = nil
+	carryBtn.Text = "CARRY: OFF"
+	carryBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+end
+
+local function toggleCarry()
+	if isCarrying then
+		dropPlayer()
+		return
+	end
+
+	local target = getClosestPlayer()
+	if target and target.Character then
+		local targetHum = target.Character:FindFirstChild("Humanoid")
+		
+		if targetHum and targetHum.SeatPart then
+			local seat = targetHum.SeatPart
+			seat.Anchored = false
+
+			-- Position the seat directly in front of local player
+			seat.CFrame = rootPart.CFrame * CFrame.new(0, 1, -4)
+
+			-- Create a physical WeldConstraint so physics replicates to the server
+			carryWeld = Instance.new("WeldConstraint")
+			carryWeld.Name = "SeatCarryWeld"
+			carryWeld.Part0 = rootPart
+			carryWeld.Part1 = seat
+			carryWeld.Parent = rootPart
+
+			carriedPlayer = target
+			isCarrying = true
+
+			carryBtn.Text = "DROP: " .. string.sub(target.DisplayName, 1, 7)
+			carryBtn.BackgroundColor3 = Color3.fromRGB(230, 126, 34)
+		else
+			-- Notify player if target isn't sitting down
+			carryBtn.Text = "NOT IN SEAT!"
+			task.delay(1.5, function()
+				if not isCarrying then
+					carryBtn.Text = "CARRY: OFF"
+				end
+			end)
+		end
+	end
+end
+
+carryBtn.Activated:Connect(toggleCarry)
+
+-- Safely drop if player leaves or un-seats
+RunService.Heartbeat:Connect(function()
+	if isCarrying and carriedPlayer and carriedPlayer.Character then
+		local targetHum = carriedPlayer.Character:FindFirstChild("Humanoid")
+		if not targetHum or not targetHum.SeatPart or targetHum.Health <= 0 then
+			dropPlayer()
+		end
+	end
+end)
+
+-- ==========================================
+-- 5. FLIGHT LOGIC
+-- ==========================================
+local function toggleFlight()
+	isFlying = not isFlying
+	flyBtn.Text = isFlying and "FLY: ON" or "FLY: OFF"
+	flyBtn.BackgroundColor3 = isFlying and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(35, 35, 35)
+
+	if isFlying then
+		humanoid.PlatformStand = true
+		attachment = Instance.new("Attachment", rootPart)
+
+		linearVelocity = Instance.new("LinearVelocity", rootPart)
+		linearVelocity.Attachment0 = attachment
+		linearVelocity.MaxForce = 10000000
+		linearVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+
+		alignOrientation = Instance.new("AlignOrientation", rootPart)
+		alignOrientation.Attachment0 = attachment
+		alignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		alignOrientation.MaxTorque = 10000000
+		alignOrientation.Responsiveness = 200
+	else
+		humanoid.PlatformStand = false
+		if linearVelocity then linearVelocity:Destroy() end
+		if alignOrientation then alignOrientation:Destroy() end
+		if attachment then attachment:Destroy() end
+		
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = true end
+		end
+	end
+end
+
+flyBtn.Activated:Connect(toggleFlight)
+
+-- PC Hotkeys (E = Fly, Q = ESP, R = Carry)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.E then toggleFlight() end
+	if input.KeyCode == Enum.KeyCode.R then toggleCarry() end
+	if input.KeyCode == Enum.KeyCode.Q then 
+		isESPEnabled = not isESPEnabled
+		espBtn.Text = isESPEnabled and "ESP: ON" or "ESP: OFF"
+		espBtn.BackgroundColor3 = isESPEnabled and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(35, 35, 35)
+		updateAllESP()
+	end
+end)
+
+-- Frame Updates (Noclip & Flight Movement)
+RunService.Stepped:Connect(function()
+	if isFlying and character then
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = false end
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	if not isFlying or not rootPart or not humanoid or not linearVelocity then return end
+
+	local camera = workspace.CurrentCamera
+	alignOrientation.CFrame = camera.CFrame
+
+	local moveDirection = humanoid.MoveDirection
+	local flyVector = Vector3.zero
+
+	if moveDirection.Magnitude > 0 then
+		local camCFrame = camera.CFrame
+		local flatLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+		local flatRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+		
+		local forwardAmount = moveDirection:Dot(flatLook)
+		local rightAmount = moveDirection:Dot(flatRight)
+		
+		flyVector = (camCFrame.LookVector * forwardAmount) + (camCFrame.RightVector * rightAmount)
+	end
+
+	if humanoid.Jump or moveUpMobile then
+		flyVector = flyVector + Vector3.new(0, 1, 0)
+	elseif moveDownMobile then
+		flyVector = flyVector + Vector3.new(0, -1, 0)
+	end
+
+	if flyVector.Magnitude > 0 then
+		linearVelocity.VectorVelocity = flyVector.Unit * FLY_SPEED
+	else
+		linearVelocity.VectorVelocity = Vector3.zero
+	end
+end)
+
+player.CharacterAdded:Connect(function(newChar)
+	character = newChar
+	humanoid = character:WaitForChild("Humanoid")
+	rootPart = character:WaitForChild("HumanoidRootPart")
+	isFlying = false
+	dropPlayer()
+	flyBtn.Text = "FLY: OFF"
+	flyBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+	if isCarrying and leavingPlayer == carriedPlayer then dropPlayer() end
+end)
